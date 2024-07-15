@@ -1,5 +1,9 @@
 EXTENSION = vector
+<<<<<<< HEAD
 EXTVERSION = 0.7.4
+=======
+EXTVERSION = 0.7.3-lanterncloud
+>>>>>>> 955e11e (Release a custom pgvector version for lanterncloud)
 
 MODULE_big = vector
 DATA = $(wildcard sql/*--*--*.sql)
