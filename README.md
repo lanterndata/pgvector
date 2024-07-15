@@ -1,3 +1,9 @@
+# Notice
+
+N.B.: this is a modified version of pgvector that we use at [Lantern Cloud](https://lantern.dev/)
+
+---
+
 # pgvector
 
 Open-source vector similarity search for Postgres
