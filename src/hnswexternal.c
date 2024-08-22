@@ -18,15 +18,16 @@
 
 static int32 ReadUsearchIndex( char* index_file_path, metadata_t* metadata, char** data, usearch_index_t* usearch_index, struct stat* index_file_stat )
 {
-   usearch_error_t error = NULL;
-   usearch_init_options_t opts;
    int index_file_fd;
-   MemSet( &opts, 0, sizeof( opts ) );
+   usearch_error_t error = NULL;
+   usearch_init_options_t opts = { 0 };
+
    *usearch_index = usearch_init( &opts, NULL, &error );
    if( error != NULL ) {
       elog( ERROR, "could not initialize usearch index" );
    }
 
+   elog( INFO, "Loading %s", index_file_path );
    usearch_load( *usearch_index, index_file_path, &error );
 
    if( error != NULL ) {
@@ -159,7 +160,7 @@ void ImportExternalIndex( Relation heap, Relation index, IndexInfo* indexInfo, H
       vector_tuple.t_tableOid = RelationGetRelid( heap );
       ItemPointerSet( &( vector_tuple.t_self ), BlockIdGetBlockNumber( &element_tid.ip_blkid ), element_tid.ip_posid );
 
-      Datum vec_datum = heap_getattr( &vector_tuple, 2, vector_tuple_desc, &isNull );
+      Datum vec_datum = heap_getattr( &vector_tuple, index->rd_index->indkey.values[ 0 ], vector_tuple_desc, &isNull );
       Vector* vec = (Vector*)PG_DETOAST_DATUM( vec_datum );
       // =======================================
 
