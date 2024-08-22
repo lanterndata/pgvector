@@ -64,6 +64,17 @@ HnswInit(void)
 	add_int_reloption(hnsw_relopt_kind, "ef_construction", "Size of the dynamic candidate list for construction",
 					  HNSW_DEFAULT_EF_CONSTRUCTION, HNSW_MIN_EF_CONSTRUCTION, HNSW_MAX_EF_CONSTRUCTION, AccessExclusiveLock);
 
+    add_string_reloption(hnsw_relopt_kind,
+                         "_experimental_index_path",
+                         "Pgvector expored index file path",
+                         NULL,
+                         NULL
+#if PG_VERSION_NUM >= 130000
+                         ,
+                         AccessExclusiveLock
+#endif
+    );
+
 	DefineCustomIntVariable("hnsw.ef_search", "Sets the size of the dynamic candidate list for search",
 							"Valid range is 1..1000.", &hnsw_ef_search,
 							HNSW_DEFAULT_EF_SEARCH, HNSW_MIN_EF_SEARCH, HNSW_MAX_EF_SEARCH, PGC_USERSET, 0, NULL, NULL, NULL);
@@ -145,6 +156,7 @@ hnswoptions(Datum reloptions, bool validate)
 	static const relopt_parse_elt tab[] = {
 		{"m", RELOPT_TYPE_INT, offsetof(HnswOptions, m)},
 		{"ef_construction", RELOPT_TYPE_INT, offsetof(HnswOptions, efConstruction)},
+        {"_experimental_index_path", RELOPT_TYPE_STRING, offsetof(HnswOptions, experimantal_index_path_offset)},
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate,

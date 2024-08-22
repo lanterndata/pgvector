@@ -1,0 +1,7 @@
+[submodule "third_party/usearch"]
+	path = third_party/usearch
+	url = https://github.com/ngalstyan4/usearch.git
+	branch = main-lantern
+[submodule "usearch"]
+	path = usearch
+	url = https://github.com/ngalstyan4/usearch.git

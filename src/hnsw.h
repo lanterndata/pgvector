@@ -367,6 +367,9 @@ typedef struct HnswVacuumState
 }			HnswVacuumState;
 
 /* Methods */
+void        CreateMetaPage( HnswBuildState* buildstate );
+void        HnswBuildAppendPage(Relation index, Buffer *buf, Page *page, ForkNumber forkNum);
+void        ImportExternalIndex( Relation heap, Relation index, IndexInfo* indexInfo, HnswBuildState* buildstate, ForkNumber forkNum, char* index_file_path );
 int			HnswGetM(Relation index);
 int			HnswGetEfConstruction(Relation index);
 FmgrInfo   *HnswOptionalProcInfo(Relation index, uint16 procnum);
