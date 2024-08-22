@@ -169,6 +169,7 @@ typedef struct HnswOptions
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
 	int			m;				/* number of connections */
 	int			efConstruction; /* size of dynamic candidate list */
+    int 		experimantal_index_path_offset;
 }			HnswOptions;
 
 typedef struct HnswGraph
@@ -370,6 +371,7 @@ typedef struct HnswVacuumState
 void        CreateMetaPage( HnswBuildState* buildstate );
 void        HnswBuildAppendPage(Relation index, Buffer *buf, Page *page, ForkNumber forkNum);
 void        ImportExternalIndex( Relation heap, Relation index, IndexInfo* indexInfo, HnswBuildState* buildstate, ForkNumber forkNum, char* index_file_path );
+char 		*HnswGetIndexFilePath(Relation index);
 int			HnswGetM(Relation index);
 int			HnswGetEfConstruction(Relation index);
 FmgrInfo   *HnswOptionalProcInfo(Relation index, uint16 procnum);
