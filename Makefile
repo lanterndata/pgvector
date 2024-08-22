@@ -1,10 +1,10 @@
 EXTENSION = vector
-EXTVERSION = 0.8.0
+EXTVERSION = 0.8.0-lanterncloud
 
 MODULE_big = vector
 DATA = $(wildcard sql/*--*--*.sql)
 DATA_built = sql/$(EXTENSION)--$(EXTVERSION).sql
-OBJS = src/bitutils.o src/bitvec.o src/halfutils.o src/halfvec.o src/hnsw.o src/hnswbuild.o src/hnswinsert.o src/hnswscan.o src/hnswutils.o src/hnswvacuum.o src/ivfbuild.o src/ivfflat.o src/ivfinsert.o src/ivfkmeans.o src/ivfscan.o src/ivfutils.o src/ivfvacuum.o src/sparsevec.o src/vector.o
+OBJS = third_party/usearch/c/lib.o src/usearch_storage.o src/bitutils.o src/bitvec.o src/halfutils.o src/halfvec.o src/hnsw.o src/hnswbuild.o src/hnswinsert.o src/hnswscan.o src/hnswutils.o src/hnswvacuum.o src/ivfbuild.o src/ivfflat.o src/ivfinsert.o src/ivfkmeans.o src/ivfscan.o src/ivfutils.o src/ivfvacuum.o src/sparsevec.o src/vector.o src/external_index_socket_ssl.o src/external_index_socket.o src/hnswexternal.o
 HEADERS = src/halfvec.h src/sparsevec.h src/vector.h
 
 TESTS = $(wildcard test/sql/*.sql)
@@ -20,6 +20,7 @@ ifeq ($(shell uname -s), Darwin)
 		# no difference with -march=armv8.5-a
 		OPTFLAGS =
 	endif
+  OPTFLAGS += -undefined dynamic_lookup -lc++
 endif
 
 # PowerPC doesn't support -march=native
@@ -30,7 +31,8 @@ endif
 # For auto-vectorization:
 # - GCC (needs -ftree-vectorize OR -O3) - https://gcc.gnu.org/projects/tree-ssa/vectorization.html
 # - Clang (could use pragma instead) - https://llvm.org/docs/Vectorizers.html
-PG_CFLAGS += $(OPTFLAGS) -ftree-vectorize -fassociative-math -fno-signed-zeros -fno-trapping-math
+PG_CFLAGS += $(OPTFLAGS) -O3 -I./third_party/usearch/c -ftree-vectorize -fassociative-math -fno-signed-zeros -fno-trapping-math
+PG_CPPFLAGS += -O3 -I./third_party/usearch/c -I./third_party/usearch/include -I./third_party/usearch/fp16/include
 
 # Debug GCC auto-vectorization
 # PG_CFLAGS += -fopt-info-vec

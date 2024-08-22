@@ -129,6 +129,18 @@ HnswGetEfConstruction(Relation index)
 }
 
 /*
+ * Get external index file path
+ */
+bool
+HnswGetExternal(Relation index)
+{
+	HnswOptions *opts = (HnswOptions *) index->rd_options;
+
+    if(!opts) return false;
+    return opts->external;
+}
+
+/*
  * Get proc
  */
 FmgrInfo *

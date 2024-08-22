@@ -30,6 +30,10 @@ int			hnsw_iterative_scan;
 int			hnsw_max_scan_tuples;
 double		hnsw_scan_mem_multiplier;
 int			hnsw_lock_tranche_id;
+int         hnsw_external_index_port;
+char       *hnsw_external_index_host;
+bool        hnsw_external_index_secure;
+
 static relopt_kind hnsw_relopt_kind;
 
 /*
@@ -75,9 +79,54 @@ HnswInit(void)
 	add_int_reloption(hnsw_relopt_kind, "ef_construction", "Size of the dynamic candidate list for construction",
 					  HNSW_DEFAULT_EF_CONSTRUCTION, HNSW_MIN_EF_CONSTRUCTION, HNSW_MAX_EF_CONSTRUCTION, AccessExclusiveLock);
 
+    add_bool_reloption(hnsw_relopt_kind,
+                       "external",
+                       "Whether or not use external indexing protocol",
+                       false
+#if PG_VERSION_NUM >= 130000
+                       ,
+                       AccessExclusiveLock
+#endif
+    );
+
 	DefineCustomIntVariable("hnsw.ef_search", "Sets the size of the dynamic candidate list for search",
 							"Valid range is 1..1000.", &hnsw_ef_search,
 							HNSW_DEFAULT_EF_SEARCH, HNSW_MIN_EF_SEARCH, HNSW_MAX_EF_SEARCH, PGC_USERSET, 0, NULL, NULL, NULL);
+	
+    DefineCustomIntVariable("hnsw.external_index_port",
+                            "Port for external indexing",
+                            "Change this value if you run lantern daemon on different port",
+                            &hnsw_external_index_port,
+                            8998,
+                            80,
+                            65535,
+                            PGC_USERSET,
+                            0,
+                            NULL,
+                            NULL,
+                            NULL);
+
+    DefineCustomStringVariable("hnsw.external_index_host",
+                               "Host for external indexing",
+                               "Change this value if you run lantern daemon on remote host",
+                               &hnsw_external_index_host,
+                               "127.0.0.1",
+                               PGC_USERSET,
+                               0,
+                               NULL,
+                               NULL,
+                               NULL);
+
+    DefineCustomBoolVariable("hnsw.external_index_secure",
+                             "Use SSL connection when connecting to external index socket",
+                             "Set this to 0 to disable secure connection",
+                             &hnsw_external_index_secure,
+                             true,
+                             PGC_USERSET,
+                             0,
+                             NULL,
+                             NULL,
+                             NULL);
 
 	DefineCustomEnumVariable("hnsw.iterative_scan", "Sets the mode for iterative scans",
 							 NULL, &hnsw_iterative_scan,
@@ -226,6 +275,7 @@ hnswoptions(Datum reloptions, bool validate)
 	static const relopt_parse_elt tab[] = {
 		{"m", RELOPT_TYPE_INT, offsetof(HnswOptions, m)},
 		{"ef_construction", RELOPT_TYPE_INT, offsetof(HnswOptions, efConstruction)},
+        {"external", RELOPT_TYPE_INT, offsetof(HnswOptions, external)},
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate,

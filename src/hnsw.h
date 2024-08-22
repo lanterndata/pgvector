@@ -8,9 +8,12 @@
 #include "lib/pairingheap.h"
 #include "nodes/execnodes.h"
 #include "port.h"				/* for random() */
+#include "usearch.h"
+#include "external_index_socket.h"
 #include "utils/relptr.h"
 #include "utils/sampling.h"
 #include "vector.h"
+#include "external_index_socket.h"
 
 #define HNSW_MAX_DIM 2000
 #define HNSW_MAX_NNZ 1000
@@ -113,6 +116,9 @@ extern int	hnsw_iterative_scan;
 extern int	hnsw_max_scan_tuples;
 extern double hnsw_scan_mem_multiplier;
 extern int	hnsw_lock_tranche_id;
+extern int  hnsw_external_index_port;
+extern char *hnsw_external_index_host;
+extern bool hnsw_external_index_secure;
 
 typedef enum HnswIterativeScanMode
 {
@@ -183,6 +189,7 @@ typedef struct HnswOptions
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
 	int			m;				/* number of connections */
 	int			efConstruction; /* size of dynamic candidate list */
+    bool 		external;
 }			HnswOptions;
 
 typedef struct HnswGraph
@@ -299,6 +306,11 @@ typedef struct HnswBuildState
 	HnswLeader *hnswleader;
 	HnswShared *hnswshared;
 	char	   *hnswarea;
+
+	/* External Indexing */
+	external_index_socket_t *external_socket;
+	usearch_index_t usearch_index;
+	uint8 scalar_bits;
 }			HnswBuildState;
 
 typedef struct HnswMetaPageData
@@ -408,6 +420,10 @@ typedef struct HnswVacuumState
 }			HnswVacuumState;
 
 /* Methods */
+void        CreateMetaPage( HnswBuildState* buildstate );
+void        HnswBuildAppendPage(Relation index, Buffer *buf, Page *page, ForkNumber forkNum);
+void        ImportExternalIndex( Relation heap, Relation index, IndexInfo* indexInfo, HnswBuildState* buildstate, ForkNumber forkNum);
+bool 		HnswGetExternal(Relation index);
 int			HnswGetM(Relation index);
 int			HnswGetEfConstruction(Relation index);
 FmgrInfo   *HnswOptionalProcInfo(Relation index, uint16 procnum);
