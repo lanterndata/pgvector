@@ -72,7 +72,7 @@
 /*
  * Create the metapage
  */
-static void
+ void
 CreateMetaPage(HnswBuildState * buildstate)
 {
 	Relation	index = buildstate->index;
@@ -106,7 +106,7 @@ CreateMetaPage(HnswBuildState * buildstate)
 /*
  * Add a new page
  */
-static void
+ void
 HnswBuildAppendPage(Relation index, Buffer *buf, Page *page, ForkNumber forkNum)
 {
 	/* Add a new page */
@@ -1116,7 +1116,14 @@ BuildIndex(Relation heap, Relation index, IndexInfo *indexInfo,
 
 	InitBuildState(buildstate, heap, index, indexInfo, forkNum);
 
-	BuildGraph(buildstate, forkNum);
+	char* external_index_file = HnswGetIndexFilePath(index);
+
+	if (external_index_file != NULL) {
+		ImportExternalIndex(heap, index, indexInfo, buildstate, forkNum, external_index_file);
+	} else {
+		BuildGraph(buildstate, forkNum);
+	}
+
 
 	if (RelationNeedsWAL(index) || forkNum == INIT_FORKNUM)
 		log_newpage_range(index, forkNum, 0, RelationGetNumberOfBlocksInFork(index, forkNum), true);
