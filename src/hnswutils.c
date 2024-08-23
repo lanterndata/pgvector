@@ -144,17 +144,13 @@ HnswGetEfConstruction(Relation index)
 /*
  * Get external index file path
  */
-char *
-HnswGetIndexFilePath(Relation index)
+bool
+HnswGetExternal(Relation index)
 {
 	HnswOptions *opts = (HnswOptions *) index->rd_options;
 
-    if(!opts) return NULL;
-    if(!opts->experimantal_index_path_offset) {
-        return NULL;
-    }
-
-    return (char *)opts + opts->experimantal_index_path_offset;
+    if(!opts) return false;
+    return opts->external;
 }
 
 /*

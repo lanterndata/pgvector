@@ -11,6 +11,7 @@
 #include "utils/relptr.h"
 #include "utils/sampling.h"
 #include "vector.h"
+#include "external_index_socket.h"
 
 #define HNSW_MAX_DIM 2000
 #define HNSW_MAX_NNZ 1000
@@ -107,6 +108,9 @@
 /* Variables */
 extern int	hnsw_ef_search;
 extern int	hnsw_lock_tranche_id;
+extern int  hnsw_external_index_port;
+extern char *hnsw_external_index_host;
+extern bool hnsw_external_index_secure;
 
 typedef struct HnswElementData HnswElementData;
 typedef struct HnswNeighborArray HnswNeighborArray;
@@ -169,7 +173,7 @@ typedef struct HnswOptions
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
 	int			m;				/* number of connections */
 	int			efConstruction; /* size of dynamic candidate list */
-    int 		experimantal_index_path_offset;
+    bool 		external;
 }			HnswOptions;
 
 typedef struct HnswGraph
@@ -276,6 +280,9 @@ typedef struct HnswBuildState
 	HnswLeader *hnswleader;
 	HnswShared *hnswshared;
 	char	   *hnswarea;
+
+	/* External Indexing */
+	external_index_socket_t *external_socket;
 }			HnswBuildState;
 
 typedef struct HnswMetaPageData
@@ -370,8 +377,8 @@ typedef struct HnswVacuumState
 /* Methods */
 void        CreateMetaPage( HnswBuildState* buildstate );
 void        HnswBuildAppendPage(Relation index, Buffer *buf, Page *page, ForkNumber forkNum);
-void        ImportExternalIndex( Relation heap, Relation index, IndexInfo* indexInfo, HnswBuildState* buildstate, ForkNumber forkNum, char* index_file_path );
-char 		*HnswGetIndexFilePath(Relation index);
+void        ImportExternalIndex( Relation heap, Relation index, IndexInfo* indexInfo, HnswBuildState* buildstate, ForkNumber forkNum);
+bool 		HnswGetExternal(Relation index);
 int			HnswGetM(Relation index);
 int			HnswGetEfConstruction(Relation index);
 FmgrInfo   *HnswOptionalProcInfo(Relation index, uint16 procnum);

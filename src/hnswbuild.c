@@ -1116,10 +1116,8 @@ BuildIndex(Relation heap, Relation index, IndexInfo *indexInfo,
 
 	InitBuildState(buildstate, heap, index, indexInfo, forkNum);
 
-	char* external_index_file = HnswGetIndexFilePath(index);
-
-	if (external_index_file != NULL) {
-		ImportExternalIndex(heap, index, indexInfo, buildstate, forkNum, external_index_file);
+	if (HnswGetExternal(index)) {
+		ImportExternalIndex(heap, index, indexInfo, buildstate, forkNum);
 	} else {
 		BuildGraph(buildstate, forkNum);
 	}
