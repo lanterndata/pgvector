@@ -209,20 +209,33 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
 
     /* Create Neighbor Tuple */
     HnswNeighborTuple ntup = palloc0(ntupSize);
-    uint32 slot_count = 0;
-    ldb_unaligned_slot_union_t *slots =
-        get_node_neighbors_mut(&metadata, node, node_level, &slot_count);
     ntup->type = HNSW_NEIGHBOR_TUPLE_TYPE;
     ntup->count = (node_level + 2) * metadata.connectivity;
     ntup->unused = 0;
 
-    for (uint32 j = 0; j < ntup->count; j++) {
-      if (j < slot_count) {
-        memcpy(&ntup->indextids[j].ip_blkid, &slots[j].seqid,
-               sizeof(slots[j].seqid));
-      } else {
-        ItemPointerSetInvalid(&ntup->indextids[j]);
+    uint16 neighbor_len = 0;
+
+    for (int32 i = node_level; i >= 0; i--) {
+      uint32 slot_count = 0;
+      ldb_unaligned_slot_union_t *slots =
+          get_node_neighbors_mut(&metadata, node, i, &slot_count);
+
+      for (uint32 j = 0; j < slot_count; j++) {
+        memcpy(&ntup->indextids[neighbor_len++].ip_blkid, &slots[j].seqid,
+               sizeof(uint32));
+        if (neighbor_len > ntup->count) {
+          close(index_file_fd);
+          usearch_free(usearch_index, &error);
+          munmap(data, index_file_stat.st_size);
+          elog(ERROR, "neighbor list can not be more than %u in level %u",
+               ntup->count, node_level);
+        }
       }
+    }
+
+    while (neighbor_len < ntup->count) {
+      ItemPointerSetInvalid(&ntup->indextids[neighbor_len]);
+      neighbor_len++;
     }
     /* ========= Create Neighbor Tuple END ============ */
 
