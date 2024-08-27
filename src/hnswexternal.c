@@ -88,7 +88,7 @@ static void InitUsearchIndexFromSocket(HnswBuildState *buildstate,
 
   buildstate->external_socket = create_external_index_session(
       hnsw_external_index_host, hnsw_external_index_port,
-      hnsw_external_index_secure, opts, 10000);
+      hnsw_external_index_secure, opts, 100000);
 
   buildstate->reltuples = table_index_build_scan(
       buildstate->heap, buildstate->index, buildstate->indexInfo, true, true,
@@ -173,66 +173,10 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
     node_label = label_from_node(node);
 
     /* Create Element Tuple */
-    // TODO:::::: FIX usearch_get
-    /*
-    uint32 vector_bytes = node_vector_size( node, metadata.dimensions, &metadata
-    ); Vector* vec = InitVector( buildstate->dimensions );
-    // memcpy( vec->x, node, vector_bytes );
-    float* vector = palloc0( vector_bytes );
-    uint32 found_count = usearch_get( usearch_index, node_label, 1, vector,
-    usearch_scalar_f32_k, &error ); elog( INFO, "FOUND %u", found_count );
-
-    if( error != NULL ) {
-       elog( ERROR, "error appeared %s", error );
-    }
-
-    if( found_count == 0 ) {
-       elog( ERROR, "could not find vector" );
-    }
-    for( int i = 0; i < buildstate->dimensions; i++ ) {
-       vec->x[ i ] = vector[ i ];
-    }
-    */
-    // TODO::: temp solution of reading from heap to get vector
-    memcpy(&element_tid, &node_label, sizeof(ItemPointerData));
-    Buffer vector_buf = ReadBufferExtended(
-        heap, forkNum, BlockIdGetBlockNumber(&element_tid.ip_blkid), RBM_NORMAL,
-        GetAccessStrategy(BAS_BULKREAD));
-    Page vector_page = BufferGetPage(vector_buf);
-    TupleDesc vector_tuple_desc = RelationGetDescr(heap);
-    ItemId vector_id = PageGetItemId(vector_page, element_tid.ip_posid);
-    bool isNull;
-
-    if (!ItemIdIsValid(vector_id)) {
-      buildstate->external_socket->close(buildstate->external_socket);
-      usearch_free(usearch_index, &error);
-      elog(ERROR, "invalid item id");
-    }
-
-    HeapTupleData vector_tuple;
-    vector_tuple.t_data = (HeapTupleHeader)PageGetItem(vector_page, vector_id);
-    vector_tuple.t_len = ItemIdGetLength(vector_id);
-    vector_tuple.t_tableOid = RelationGetRelid(heap);
-    ItemPointerSet(&(vector_tuple.t_self),
-                   BlockIdGetBlockNumber(&element_tid.ip_blkid),
-                   element_tid.ip_posid);
-
-    Datum vec_datum =
-        heap_getattr(&vector_tuple, index->rd_index->indkey.values[0],
-                     vector_tuple_desc, &isNull);
-
-    if (isNull) {
-      // There was a strange bug, when the build callback
-      // was receiving newer version of tuple e.g (142, 6), but that tuple
-      // was not visible here when trying to read from page.
-      // ater FULL VACCUM it started to work, but the issue is not resolved.
-
-      buildstate->external_socket->close(buildstate->external_socket);
-      usearch_free(usearch_index, &error);
-      elog(ERROR, "indexed element (%u, %u) can not be null",
-           BlockIdGetBlockNumber(&element_tid.ip_blkid), element_tid.ip_posid);
-    }
-    Vector *vec = (Vector *)PG_DETOAST_DATUM(vec_datum);
+    uint32 vector_bytes =
+        node_vector_size(node, metadata.dimensions, &metadata);
+    Vector *vec = InitVector(buildstate->dimensions);
+    memcpy(vec->x, node + (node_size - vector_bytes), vector_bytes);
     // =======================================
 
     uint32 etupSize = HNSW_ELEMENT_TUPLE_SIZE(VARSIZE_ANY(vec));
@@ -259,7 +203,6 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
     }
 
     memcpy(&etup->data, vec, VARSIZE_ANY(vec));
-    ReleaseBuffer(vector_buf);
     /* ========= Create Element Tuple END ============ */
 
     /* Create Neighbor Tuple */
