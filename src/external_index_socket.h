@@ -1,11 +1,11 @@
 #ifndef LDB_EXTERNAL_IDX_SOCKET_H
 #define LDB_EXTERNAL_IDX_SOCKET_H
+#include <limits.h>
 #include <postgres.h>
 
 #include "external_index_socket_ssl.h"
 #include "usearch.h"
 
-#define CHAR_BIT 8
 #define EXTERNAL_INDEX_MAGIC_MSG_SIZE 4
 #define EXTERNAL_INDEX_INIT_MSG 0x13333337
 #define EXTERNAL_INDEX_END_MSG 0x31333337

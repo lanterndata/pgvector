@@ -27,11 +27,17 @@ ifneq ($(filter ppc64%, $(shell uname -m)), )
 	OPTFLAGS =
 endif
 
+IS_CLANG := $(shell $(CC) --version | head -n 1 | grep -c clang)
+
+ifneq ($(IS_CLANG), 0)
+  OPTFLAGS += -undefined dynamic_lookup
+endif 
+
 # For auto-vectorization:
 # - GCC (needs -ftree-vectorize OR -O3) - https://gcc.gnu.org/projects/tree-ssa/vectorization.html
 # - Clang (could use pragma instead) - https://llvm.org/docs/Vectorizers.html
-PG_CFLAGS += $(OPTFLAGS) -g -O0 -undefined dynamic_lookup -I./third_party/usearch/c -lc++ -ftree-vectorize -fassociative-math -fno-signed-zeros -fno-trapping-math
-PG_CPPFLAGS += -g -O0 -I./third_party/usearch/c -I./third_party/usearch/include
+PG_CFLAGS += $(OPTFLAGS) -O3 -I./third_party/usearch/c -lc++ -ftree-vectorize -fassociative-math -fno-signed-zeros -fno-trapping-math
+PG_CPPFLAGS += -O3 -I./third_party/usearch/c -I./third_party/usearch/include ./third_party/usearch/fp16/include
 
 # Debug GCC auto-vectorization
 # PG_CFLAGS += -fopt-info-vec
