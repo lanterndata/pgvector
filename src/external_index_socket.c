@@ -3,6 +3,7 @@
 
 #include "external_index_socket.h"
 
+#include "halfvec.h"
 #include <arpa/inet.h>
 #include <miscadmin.h>
 #include <netdb.h>
@@ -337,18 +338,38 @@ void external_index_send_tuple(external_index_socket_t *socket_con,
   uint32 tuple_size;
   uint32 vector_size;
   uint32 dims = dimensions;
+  uint32 quantization = scalar_bits;
+  void *value = vector;
 
-  if (scalar_bits < CHAR_BIT) {
+  if (quantization < CHAR_BIT) {
     dims = dimensions * (sizeof(uint32) * CHAR_BIT);
     vector_size = (dims + CHAR_BIT - 1) / CHAR_BIT; // ceiling division
     tuple_size = sizeof(usearch_label_t) + vector_size;
   } else {
+    if (quantization == 16) {
+      // TODO:: currently we are casting vec->x to 32 bit floats (even for f16
+      // values) this is because currently we are always sending 32bit values
+      // for any kind of scalar quantization from lantern thus we can change the
+      // logic to expect smaller values as soon as we implement the change in
+      // lantern as well
+      quantization = 32;
+      value = palloc0(dims * quantization);
+      for (int i = 0; i < dims; i++) {
+        ((float *)value)[i] = (float)((half *)(vector))[i];
+      }
+    }
+
     tuple_size =
-        sizeof(usearch_label_t) + dimensions * (scalar_bits / CHAR_BIT);
+        sizeof(usearch_label_t) + dimensions * (quantization / CHAR_BIT);
   }
   // send tuple over socket if this is external indexing
   memcpy(tuple, label, sizeof(usearch_label_t));
   memcpy(tuple + sizeof(usearch_label_t), vector,
          tuple_size - sizeof(usearch_label_t));
   writeall_or_error(socket_con, tuple, tuple_size, 0);
+
+  // we have casted original values via copy
+  if (scalar_bits != quantization) {
+    pfree(value);
+  }
 }
