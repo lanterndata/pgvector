@@ -21,7 +21,7 @@
 #include "tcop/tcopprot.h"
 #include "utils/datum.h"
 #include "utils/memutils.h"
-#include "utils/syscache.h"
+#include "catalog/namespace.h"
 
 #include "external_index_socket.h"
 #include "hnsw.h"
@@ -111,14 +111,8 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   TupleDesc tupleDesc = RelationGetDescr(heap);
   Form_pg_attribute attr = &tupleDesc->attrs[index->rd_index->indkey.values[0] - 1];
   Oid columnType = attr->atttypid;
-  Oid Vector_Oid = GetSysCacheOid2(TYPENAMENSP,
-						  Anum_pg_type_oid,
-                          CStringGetDatum("vector"),
-                          ObjectIdGetDatum(heap->rd_rel->relnamespace));
-  Oid HalfVector_Oid = GetSysCacheOid2(TYPENAMENSP,
-						  Anum_pg_type_oid,
-                          CStringGetDatum("halfvec"),
-                          ObjectIdGetDatum(heap->rd_rel->relnamespace));
+  Oid Vector_Oid = TypenameGetTypid("vector");
+  Oid HalfVector_Oid = TypenameGetTypid("halfvec");
 
   opts.dimensions = buildstate->dimensions;
   opts.connectivity = buildstate->m;
