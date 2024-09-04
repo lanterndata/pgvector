@@ -283,6 +283,7 @@ typedef struct HnswBuildState
 
 	/* External Indexing */
 	external_index_socket_t *external_socket;
+	uint8 scalar_bits;
 }			HnswBuildState;
 
 typedef struct HnswMetaPageData

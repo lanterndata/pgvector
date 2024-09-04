@@ -21,6 +21,7 @@
 #include "tcop/tcopprot.h"
 #include "utils/datum.h"
 #include "utils/memutils.h"
+#include "utils/syscache.h"
 
 #include "external_index_socket.h"
 #include "hnsw.h"
@@ -29,6 +30,7 @@
 #include "usearch_storage.hpp"
 #include "utils/rel.h"
 #include "vector.h"
+#include "halfvec.h"
 
 #if PG_VERSION_NUM >= 140000
 #include "utils/backend_progress.h"
@@ -55,7 +57,6 @@ static void ExternalIndexBuildCallback(Relation index, CALLBACK_ITEM_POINTER,
                                        bool tupleIsAlive, void *state) {
   HnswBuildState *buildstate = (HnswBuildState *)state;
   HnswGraph *graph = buildstate->graph;
-  MemoryContext oldCtx;
 
 #if PG_VERSION_NUM < 130000
   ItemPointer tid = &hup->t_self;
@@ -69,7 +70,7 @@ static void ExternalIndexBuildCallback(Relation index, CALLBACK_ITEM_POINTER,
   Vector *vec = (Vector *)PG_DETOAST_DATUM(values[0]);
 
   usearch_label_t label = ItemPointer2Label(tid);
-  external_index_send_tuple(buildstate->external_socket, &label, vec->x, 32,
+  external_index_send_tuple(buildstate->external_socket, &label, vec->x, buildstate->scalar_bits,
                             vec->dim);
   SpinLockAcquire(&graph->lock);
   pgstat_progress_update_param(PROGRESS_CREATEIDX_TUPLES_DONE,
@@ -107,16 +108,37 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   usearch_error_t error = NULL;
   usearch_init_options_t opts = {0};
 
+  TupleDesc tupleDesc = RelationGetDescr(heap);
+  Form_pg_attribute attr = &tupleDesc->attrs[index->rd_index->indkey.values[0] - 1];
+  Oid columnType = attr->atttypid;
+  Oid Vector_Oid = GetSysCacheOid2(TYPENAMENSP,
+						  Anum_pg_type_oid,
+                          CStringGetDatum("vector"),
+                          ObjectIdGetDatum(heap->rd_rel->relnamespace));
+  Oid HalfVector_Oid = GetSysCacheOid2(TYPENAMENSP,
+						  Anum_pg_type_oid,
+                          CStringGetDatum("halfvec"),
+                          ObjectIdGetDatum(heap->rd_rel->relnamespace));
+
   opts.dimensions = buildstate->dimensions;
   opts.connectivity = buildstate->m;
   opts.expansion_add = buildstate->efConstruction;
   opts.pq = false;
   opts.multi = false;
-  opts.quantization = usearch_scalar_f32_k;
 
-  if (buildstate->procinfo->fn_addr == vector_negative_inner_product) {
+  if (columnType == Vector_Oid) {
+	opts.quantization = usearch_scalar_f32_k;
+	buildstate->scalar_bits = 32;
+  } else if (columnType == HalfVector_Oid) {
+	opts.quantization = usearch_scalar_f16_k;
+	buildstate->scalar_bits = 16;
+  } else {
+    elog(ERROR, "unsupported element type for external indexing");
+  }
+
+  if (buildstate->procinfo->fn_addr == vector_negative_inner_product || buildstate->procinfo->fn_addr == halfvec_negative_inner_product) {
     opts.metric_kind = usearch_metric_cos_k;
-  } else if (buildstate->procinfo->fn_addr == vector_l2_squared_distance) {
+  } else if (buildstate->procinfo->fn_addr == vector_l2_squared_distance || buildstate->procinfo->fn_addr == halfvec_l2_squared_distance) {
     opts.metric_kind = usearch_metric_l2sq_k;
   } else {
     elog(ERROR, "unsupported distance metric for external indexing");
@@ -175,6 +197,8 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
     /* Create Element Tuple */
     uint32 vector_bytes =
         node_vector_size(node, metadata.dimensions, &metadata);
+    // there should not be an issue with mixing HalfVector and Vector types
+    // as long as the struct layout is the same
     Vector *vec = InitVector(buildstate->dimensions);
     memcpy(vec->x, node + (node_size - vector_bytes), vector_bytes);
     // =======================================
