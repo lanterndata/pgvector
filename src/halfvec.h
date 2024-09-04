@@ -4,6 +4,8 @@
 #define __STDC_WANT_IEC_60559_TYPES_EXT__
 
 #include <float.h>
+#include "postgres.h"
+#include "fmgr.h"
 
 /* We use two types of dispatching: intrinsics and target_clones */
 /* TODO Move to better place */
@@ -66,5 +68,7 @@ typedef struct HalfVector
 }			HalfVector;
 
 HalfVector *InitHalfVector(int dim);
+Datum       halfvec_negative_inner_product(PG_FUNCTION_ARGS);
+Datum 		halfvec_l2_squared_distance(PG_FUNCTION_ARGS);
 
 #endif
