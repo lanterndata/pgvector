@@ -205,6 +205,7 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
     if (etupSize > HNSW_TUPLE_ALLOC_SIZE) {
       buildstate->external_socket->close(buildstate->external_socket);
       usearch_free(usearch_index, &error);
+      free(data);
       elog(ERROR, "index tuple too large");
     }
 
@@ -242,6 +243,7 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
         if (neighbor_len > ntup->count) {
           buildstate->external_socket->close(buildstate->external_socket);
           usearch_free(usearch_index, &error);
+		free(data);
           elog(ERROR, "neighbor list can not be more than %u in level %u",
                ntup->count, node_level);
         }
@@ -349,5 +351,6 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   /* =========== Rewrite Neighbors END ============= */
 
   buildstate->external_socket->close(buildstate->external_socket);
+  free(data);
   usearch_free(usearch_index, &error);
 }
