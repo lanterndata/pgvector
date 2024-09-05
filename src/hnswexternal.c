@@ -13,6 +13,7 @@
 #include "access/xact.h"
 #include "access/xloginsert.h"
 #include "catalog/index.h"
+#include "catalog/namespace.h"
 #include "catalog/pg_type_d.h"
 #include "commands/progress.h"
 #include "miscadmin.h"
@@ -21,16 +22,15 @@
 #include "tcop/tcopprot.h"
 #include "utils/datum.h"
 #include "utils/memutils.h"
-#include "catalog/namespace.h"
 
 #include "external_index_socket.h"
+#include "halfvec.h"
 #include "hnsw.h"
 #include "storage/bufmgr.h"
 #include "usearch.h"
 #include "usearch_storage.hpp"
 #include "utils/rel.h"
 #include "vector.h"
-#include "halfvec.h"
 
 #if PG_VERSION_NUM >= 140000
 #include "utils/backend_progress.h"
@@ -70,8 +70,8 @@ static void ExternalIndexBuildCallback(Relation index, CALLBACK_ITEM_POINTER,
   Vector *vec = (Vector *)PG_DETOAST_DATUM(values[0]);
 
   usearch_label_t label = ItemPointer2Label(tid);
-  external_index_send_tuple(buildstate->external_socket, &label, vec->x, buildstate->scalar_bits,
-                            vec->dim);
+  external_index_send_tuple(buildstate->external_socket, &label, vec->x,
+                            buildstate->scalar_bits, vec->dim);
   SpinLockAcquire(&graph->lock);
   pgstat_progress_update_param(PROGRESS_CREATEIDX_TUPLES_DONE,
                                ++graph->indtuples);
@@ -102,6 +102,7 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
                          HnswBuildState *buildstate, ForkNumber forkNum) {
   /* Read and Parse Usearch Index */
   char *data;
+  MemoryContext oldCtx;
   metadata_t metadata;
   usearch_index_t usearch_index;
   uint64 nelem = 0;
@@ -109,7 +110,8 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   usearch_init_options_t opts = {0};
 
   TupleDesc tupleDesc = RelationGetDescr(heap);
-  Form_pg_attribute attr = &tupleDesc->attrs[index->rd_index->indkey.values[0] - 1];
+  Form_pg_attribute attr =
+      &tupleDesc->attrs[index->rd_index->indkey.values[0] - 1];
   Oid columnType = attr->atttypid;
   Oid Vector_Oid = TypenameGetTypid("vector");
   Oid HalfVector_Oid = TypenameGetTypid("halfvec");
@@ -121,18 +123,20 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   opts.multi = false;
 
   if (columnType == Vector_Oid) {
-	opts.quantization = usearch_scalar_f32_k;
-	buildstate->scalar_bits = 32;
+    opts.quantization = usearch_scalar_f32_k;
+    buildstate->scalar_bits = 32;
   } else if (columnType == HalfVector_Oid) {
-	opts.quantization = usearch_scalar_f16_k;
-	buildstate->scalar_bits = 16;
+    opts.quantization = usearch_scalar_f16_k;
+    buildstate->scalar_bits = 16;
   } else {
     elog(ERROR, "unsupported element type for external indexing");
   }
 
-  if (buildstate->procinfo->fn_addr == vector_negative_inner_product || buildstate->procinfo->fn_addr == halfvec_negative_inner_product) {
+  if (buildstate->procinfo->fn_addr == vector_negative_inner_product ||
+      buildstate->procinfo->fn_addr == halfvec_negative_inner_product) {
     opts.metric_kind = usearch_metric_cos_k;
-  } else if (buildstate->procinfo->fn_addr == vector_l2_squared_distance || buildstate->procinfo->fn_addr == halfvec_l2_squared_distance) {
+  } else if (buildstate->procinfo->fn_addr == vector_l2_squared_distance ||
+             buildstate->procinfo->fn_addr == halfvec_l2_squared_distance) {
     opts.metric_kind = usearch_metric_l2sq_k;
   } else {
     elog(ERROR, "unsupported distance metric for external indexing");
@@ -150,7 +154,11 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
 
   InitUsearchIndexFromSocket(buildstate, &opts, &data, &nelem);
   /* ============== Parse Index END ============= */
-
+  MemoryContext tmpCtx = AllocSetContextCreateInternal(
+      CurrentMemoryContext, "HNSW External Context", 0,
+      ALLOCSET_DEFAULT_INITSIZE,
+      nelem * sizeof(ItemPointerData) + ALLOCSET_DEFAULT_MAXSIZE * 2);
+  oldCtx = MemoryContextSwitchTo(tmpCtx);
   /* Create Metadata Page */
   CreateMetaPage(buildstate);
   /* =========== Create Metadata Page END ============= */
@@ -243,7 +251,7 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
         if (neighbor_len > ntup->count) {
           buildstate->external_socket->close(buildstate->external_socket);
           usearch_free(usearch_index, &error);
-		free(data);
+          free(data);
           elog(ERROR, "neighbor list can not be more than %u in level %u",
                ntup->count, node_level);
         }
@@ -296,6 +304,8 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
                            false, false);
     /* ================ Insert Tuples Into Index Page END =================== */
 
+    pfree(etup);
+    pfree(ntup);
     progress += node_size;
   }
 
@@ -353,4 +363,6 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   buildstate->external_socket->close(buildstate->external_socket);
   free(data);
   usearch_free(usearch_index, &error);
+  MemoryContextSwitchTo(oldCtx);
+  MemoryContextDelete(tmpCtx);
 }
