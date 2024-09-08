@@ -288,77 +288,56 @@ create_external_index_session(const char *host, int port, bool secure,
   return socket_con;
 }
 
-void external_index_receive_index_file(external_index_socket_t *socket_con,
-                                       uint64 *num_added_vectors,
-                                       char **result_buf) {
-  uint32 end_msg = EXTERNAL_INDEX_END_MSG;
-  char buffer[sizeof(uint64_t)];
-  char  *error_msg = NULL;
-  int64 bytes_read;
-  uint64 index_size = 0, total_received = 0;
+void external_index_receive_metadata(external_index_socket_t *socket_con, uint64 *num_added_vectors, uint64 *index_size)
+{
+    uint32 end_msg = EXTERNAL_INDEX_END_MSG;
+    char   buffer[ sizeof(uint64_t) ];
+    int64  bytes_read;
 
-  // disable read timeout while indexing is in progress
-  set_read_timeout(socket_con->fd, 0);
-  // send message indicating that we have finished streaming tuples
-  writeall_or_error(socket_con, (char *)&end_msg, EXTERNAL_INDEX_MAGIC_MSG_SIZE,
-                    0);
+    // disable read timeout while indexing is in progress
+    set_read_timeout(socket_con->fd, 0);
+    // send message indicating that we have finished streaming tuples
+    writeall_or_error(socket_con, (char *)&end_msg, EXTERNAL_INDEX_MAGIC_MSG_SIZE, 0);
 
-  // read how many tuples have been indexed
-  bytes_read = socket_con->read(socket_con, buffer, sizeof(uint64));
-  check_external_index_response_error(socket_con, buffer, bytes_read);
-  memcpy(num_added_vectors, buffer, sizeof(uint64));
+    // read how many tuples have been indexed
+    bytes_read = socket_con->read(socket_con, buffer, sizeof(uint64));
+    check_external_index_response_error(socket_con, buffer, bytes_read);
+    memcpy(num_added_vectors, buffer, sizeof(uint64));
 
-  // read index file size
-  bytes_read = socket_con->read(socket_con, buffer, sizeof(uint64));
-  check_external_index_response_error(socket_con, buffer, bytes_read);
-  memcpy(&index_size, buffer, sizeof(uint64));
+    // read index file size
+    bytes_read = socket_con->read(socket_con, buffer, sizeof(uint64));
+    check_external_index_response_error(socket_con, buffer, bytes_read);
+    memcpy(index_size, buffer, sizeof(uint64));
+}
 
-    *result_buf = malloc(index_size);
+uint64 external_index_receive_index_part(external_index_socket_t *socket_con, char *result_buf, uint64 size)
+{
+    uint32 end_msg = EXTERNAL_INDEX_END_MSG;
+    char   buffer[ sizeof(uint64_t) ];
+    char  *error_msg = NULL;
+    int64  bytes_read;
+    uint64 index_size = 0, total_received = 0;
 
-    if(*result_buf == NULL) {
-        elog(ERROR, "external index: failed to allocate buffer for index file");
-    }
-
-    memset(*result_buf, 0, index_size);
-
-  set_read_timeout(socket_con->fd, EXTERNAL_INDEX_SOCKET_TIMEOUT);
-  // start reading index into buffer
-  while (total_received < index_size) {
-    bytes_read = socket_con->read(socket_con, *result_buf + total_received,
-                                  EXTERNAL_INDEX_FILE_BUFFER_SIZE);
+    // start reading index into buffer
+    while(total_received < size) {
+        bytes_read = socket_con->read(socket_con, result_buf + total_received, size - total_received);
 
         // Check for CTRL-C interrupts
         if(INTERRUPTS_PENDING_CONDITION()) {
             socket_con->close(socket_con);
-            free(*result_buf);
             ProcessInterrupts();
         }
 
-        // handling error manually to free the allocated buffer before throwing an error
-        switch(check_external_index_response(socket_con, (char *)*result_buf + total_received, bytes_read)) {
-            case EXTERNAL_INDEX_NO_ERR:
-                break;
-            case EXTERNAL_INDEX_READ_FAILED:
-                socket_con->close(socket_con);
-                free(*result_buf);
-                elog(ERROR, "external index socket read failed");
-                break;
-            case EXTERNAL_INDEX_INDEXING_ERROR:
-                error_msg = palloc0(bytes_read + 1);
-                memcpy(error_msg, (char *)*result_buf + total_received, bytes_read);
-                error_msg[bytes_read] = '\0';
-                socket_con->close(socket_con);
-                free(*result_buf);
-                elog(ERROR, "external index error: %s", error_msg + EXTERNAL_INDEX_MAGIC_MSG_SIZE);
-                break;
+        check_external_index_response_error(socket_con, result_buf, bytes_read);
+
+        if(bytes_read == 0) {
+            break;
         }
 
-    if (bytes_read == 0) {
-      break;
+        total_received += (uint32)bytes_read;
     }
 
-    total_received += (uint32)bytes_read;
-  }
+    return total_received;
 }
 
 void external_index_send_tuple(external_index_socket_t *socket_con,

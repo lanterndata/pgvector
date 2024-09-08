@@ -57,6 +57,8 @@ static void ExternalIndexBuildCallback(Relation index, CALLBACK_ITEM_POINTER,
                                        bool tupleIsAlive, void *state) {
   HnswBuildState *buildstate = (HnswBuildState *)state;
   HnswGraph *graph = buildstate->graph;
+  Vector *vec;
+  usearch_label_t label;
 
 #if PG_VERSION_NUM < 130000
   ItemPointer tid = &hup->t_self;
@@ -67,9 +69,9 @@ static void ExternalIndexBuildCallback(Relation index, CALLBACK_ITEM_POINTER,
     return;
 
   /* Insert tuple */
-  Vector *vec = (Vector *)PG_DETOAST_DATUM(values[0]);
+  vec = (Vector *)PG_DETOAST_DATUM(values[0]);
 
-  usearch_label_t label = ItemPointer2Label(tid);
+  label = ItemPointer2Label(tid);
   external_index_send_tuple(buildstate->external_socket, &label, vec->x,
                             buildstate->scalar_bits, vec->dim);
   SpinLockAcquire(&graph->lock);
@@ -80,7 +82,7 @@ static void ExternalIndexBuildCallback(Relation index, CALLBACK_ITEM_POINTER,
 
 static void InitUsearchIndexFromSocket(HnswBuildState *buildstate,
                                        usearch_init_options_t *opts,
-                                       char **data, uint64 *nelem) {
+                                       uint64 *nelem, uint64 *index_file_size) {
 
   usearch_error_t error = NULL;
   if (error != NULL) {
@@ -95,19 +97,56 @@ static void InitUsearchIndexFromSocket(HnswBuildState *buildstate,
       buildstate->heap, buildstate->index, buildstate->indexInfo, true, true,
       ExternalIndexBuildCallback, (void *)buildstate, NULL);
 
-  external_index_receive_index_file(buildstate->external_socket, nelem, data);
+  external_index_receive_metadata(buildstate->external_socket, nelem,
+                                  index_file_size);
 }
 
 void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
                          HnswBuildState *buildstate, ForkNumber forkNum) {
   /* Read and Parse Usearch Index */
-  char *data;
   MemoryContext oldCtx;
+  MemoryContext tmpCtx;
+  Buffer buf;
+  Page page;
+  BlockNumber blockno;
+  BlockNumber last_data_block;
   metadata_t metadata;
   usearch_index_t usearch_index;
-  uint64 nelem = 0;
   usearch_error_t error = NULL;
   usearch_init_options_t opts = {0};
+  ldb_unaligned_slot_union_t *slots = NULL;
+  Vector *vec = NULL;
+  ItemPointerData tid;
+  ItemPointerData entry_tid;
+  ItemPointerData *item_pointers = NULL;
+  OffsetNumber offset = 0;
+  OffsetNumber maxoffset = 0;
+  HnswElementTuple etup = NULL;
+  HnswNeighborTuple ntup = NULL;
+  HnswMetaPage metap = NULL;
+  uint16 neighbor_len = 0;
+  int32 i = 0;
+  int32 j = 0;
+  uint32 node_id = 0;
+  uint32 node_level = 0;
+  uint32 entry_level = 0;
+  uint32 vector_bytes = 0;
+  uint32 external_index_buffer_size = BLCKSZ * 2;
+  uint32 buffer_position = 0;
+  uint32 node_size = 0;
+  uint32 etupSize = 0;
+  uint32 ntupSize = 0;
+  uint32 combinedSize = 0;
+  uint32 slot_count = 0;
+  uint64 node_label = 0;
+  uint64 total_read = 0;
+  uint64 nelem = 0;
+  uint64 index_file_size = 0;
+  uint64 entry_slot = 0;
+  uint64 seqid = 0;
+  char *node = 0;
+  char *external_index_data = palloc0(external_index_buffer_size);
+  char hdr_buffer[USEARCH_HEADER_SIZE];
 
   TupleDesc tupleDesc = RelationGetDescr(heap);
   Form_pg_attribute attr =
@@ -152,9 +191,9 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
     elog(ERROR, "failed to get usearch index metadata");
   }
 
-  InitUsearchIndexFromSocket(buildstate, &opts, &data, &nelem);
+  InitUsearchIndexFromSocket(buildstate, &opts, &nelem, &index_file_size);
   /* ============== Parse Index END ============= */
-  MemoryContext tmpCtx = AllocSetContextCreateInternal(
+  tmpCtx = AllocSetContextCreateInternal(
       CurrentMemoryContext, "HNSW External Context", 0,
       ALLOCSET_DEFAULT_INITSIZE,
       nelem * sizeof(ItemPointerData) + ALLOCSET_DEFAULT_MAXSIZE * 2);
@@ -165,59 +204,55 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
 
   elog(INFO, "indexed %zu elements", nelem);
 
-  ItemPointerData *item_pointers = palloc(nelem * sizeof(ItemPointerData));
+  item_pointers = palloc(nelem * sizeof(ItemPointerData));
 
-  uint64 entry_slot = usearch_header_get_entry_slot(data);
-  ItemPointerData entry_tid;
-  ItemPointerData element_tid;
-  uint64 progress = USEARCH_HEADER_SIZE;
-  uint32 node_id = 0;
-  uint32 node_level = 0;
-  uint32 entry_level = 0;
-  OffsetNumber offsetno = 0;
-  uint32 node_size = 0;
-  uint64 node_label = 0;
-  char *node = 0;
+  total_read += external_index_receive_index_part(
+      buildstate->external_socket, (char *)&hdr_buffer, USEARCH_HEADER_SIZE);
+  entry_slot = usearch_header_get_entry_slot((char *)&hdr_buffer);
 
   /* Append first index page */
-  Buffer buf = ReadBufferExtended(index, forkNum, 0, RBM_NORMAL,
-                                  GetAccessStrategy(BAS_BULKREAD));
+  buf = ReadBufferExtended(index, forkNum, 0, RBM_NORMAL,
+                           GetAccessStrategy(BAS_BULKREAD));
   LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
-  Page page = BufferGetPage(buf);
+  page = BufferGetPage(buf);
   HnswBuildAppendPage(index, &buf, &page, forkNum);
-  BlockNumber blockno = BufferGetBlockNumber(buf);
+  blockno = BufferGetBlockNumber(buf);
   /* ============ Append first page END =================  */
 
   for (node_id = 0; node_id < nelem; node_id++) {
     // this function will add the tuples to index pages
 
-    node = data + progress;
+    if (total_read < index_file_size) {
+      // receive max 2 page of nodes
+      total_read += external_index_receive_index_part(
+          buildstate->external_socket, external_index_data + buffer_position,
+          external_index_buffer_size - buffer_position);
+    }
+
+    node = external_index_data;
     node_level = level_from_node(node);
     node_size = node_tuple_size(node, metadata.dimensions, &metadata);
     node_label = label_from_node(node);
 
     /* Create Element Tuple */
-    uint32 vector_bytes =
-        node_vector_size(node, metadata.dimensions, &metadata);
+    vector_bytes = node_vector_size(node, metadata.dimensions, &metadata);
     // there should not be an issue with mixing HalfVector and Vector types
     // as long as the struct layout is the same
-    Vector *vec = InitVector(buildstate->dimensions);
+    vec = InitVector(buildstate->dimensions);
     memcpy(vec->x, node + (node_size - vector_bytes), vector_bytes);
     // =======================================
 
-    uint32 etupSize = HNSW_ELEMENT_TUPLE_SIZE(VARSIZE_ANY(vec));
-    uint32 ntupSize =
-        HNSW_NEIGHBOR_TUPLE_SIZE(node_level, metadata.connectivity);
-    uint32 combinedSize = etupSize + ntupSize + sizeof(ItemIdData);
+    etupSize = HNSW_ELEMENT_TUPLE_SIZE(VARSIZE_ANY(vec));
+    ntupSize = HNSW_NEIGHBOR_TUPLE_SIZE(node_level, metadata.connectivity);
+    combinedSize = etupSize + ntupSize + sizeof(ItemIdData);
 
     if (etupSize > HNSW_TUPLE_ALLOC_SIZE) {
       buildstate->external_socket->close(buildstate->external_socket);
       usearch_free(usearch_index, &error);
-      free(data);
       elog(ERROR, "index tuple too large");
     }
 
-    HnswElementTuple etup = palloc0(etupSize);
+    etup = palloc0(etupSize);
     etup->type = HNSW_ELEMENT_TUPLE_TYPE;
     etup->level = node_level;
     etup->deleted = 0;
@@ -233,28 +268,28 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
     /* ========= Create Element Tuple END ============ */
 
     /* Create Neighbor Tuple */
-    HnswNeighborTuple ntup = palloc0(ntupSize);
+    ntup = palloc0(ntupSize);
     ntup->type = HNSW_NEIGHBOR_TUPLE_TYPE;
     ntup->count = (node_level + 2) * metadata.connectivity;
     ntup->unused = 0;
 
-    uint16 neighbor_len = 0;
+    neighbor_len = 0;
 
-    for (int32 i = node_level; i >= 0; i--) {
-      uint32 slot_count = 0;
-      ldb_unaligned_slot_union_t *slots =
-          get_node_neighbors_mut(&metadata, node, i, &slot_count);
+    for (i = node_level; i >= 0; i--) {
+      slot_count = 0;
+      slots = get_node_neighbors_mut(&metadata, node, i, &slot_count);
 
-      for (uint32 j = 0; j < slot_count; j++) {
+      if (slot_count > ntup->count) {
+        buildstate->external_socket->close(buildstate->external_socket);
+        usearch_free(usearch_index, &error);
+        elog(ERROR,
+             "neighbor list can not be more than %u in level %u, received %u",
+             ntup->count, node_level, slot_count);
+      }
+
+      for (j = 0; j < slot_count; j++) {
         memcpy(&ntup->indextids[neighbor_len++].ip_blkid, &slots[j].seqid,
                sizeof(uint32));
-        if (neighbor_len > ntup->count) {
-          buildstate->external_socket->close(buildstate->external_socket);
-          usearch_free(usearch_index, &error);
-          free(data);
-          elog(ERROR, "neighbor list can not be more than %u in level %u",
-               ntup->count, node_level);
-        }
       }
     }
 
@@ -281,12 +316,10 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
       ItemPointerSet(&etup->neighbortid, blockno + 1, FirstOffsetNumber);
     }
 
-    ItemPointerData tid = {0};
+    offset = PageAddItem(page, (Item)etup, etupSize, InvalidOffsetNumber, false,
+                         false);
 
-    offsetno = PageAddItem(page, (Item)etup, etupSize, InvalidOffsetNumber,
-                           false, false);
-
-    ItemPointerSet(&tid, blockno, offsetno);
+    ItemPointerSet(&tid, blockno, offset);
 
     if (node_id == entry_slot) {
       entry_level = node_level;
@@ -300,25 +333,29 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
       blockno = BufferGetBlockNumber(buf);
     }
 
-    offsetno = PageAddItem(page, (Item)ntup, ntupSize, InvalidOffsetNumber,
-                           false, false);
+    offset = PageAddItem(page, (Item)ntup, ntupSize, InvalidOffsetNumber, false,
+                         false);
     /* ================ Insert Tuples Into Index Page END =================== */
 
     pfree(etup);
     pfree(ntup);
-    progress += node_size;
+
+    // rotate buffer
+    buffer_position = external_index_buffer_size - node_size;
+    memcpy(external_index_data, external_index_data + node_size,
+           buffer_position);
   }
 
   UnlockReleaseBuffer(buf);
 
-  BlockNumber last_data_block = blockno;
+  last_data_block = blockno;
   /* Update Entry Point */
   buf = ReadBufferExtended(index, forkNum, 0, RBM_NORMAL,
                            GetAccessStrategy(BAS_BULKREAD));
   LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
   page = BufferGetPage(buf);
-  HnswMetaPage metap = HnswPageGetMeta(page);
 
+  metap = HnswPageGetMeta(page);
   metap->insertPage = last_data_block;
   metap->entryBlkno = BlockIdGetBlockNumber(&entry_tid.ip_blkid);
   metap->entryOffno = entry_tid.ip_posid;
@@ -329,26 +366,26 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   /* ============= Update Entry Point END ============== */
 
   /* Rewrite Neighbors */
-  for (BlockNumber blockno = 1; blockno <= last_data_block; blockno++) {
+  for (blockno = 1; blockno <= last_data_block; blockno++) {
     buf = ReadBufferExtended(index, forkNum, blockno, RBM_NORMAL,
                              GetAccessStrategy(BAS_BULKREAD));
     LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
     page = BufferGetPage(buf);
-    OffsetNumber maxoffset = PageGetMaxOffsetNumber(page);
+    maxoffset = PageGetMaxOffsetNumber(page);
 
-    for (OffsetNumber offset = FirstOffsetNumber; offset <= maxoffset;
+    for (offset = FirstOffsetNumber; offset <= maxoffset;
          offset = OffsetNumberNext(offset)) {
       HnswNeighborTuple neighborpage =
           (HnswNeighborTuple)PageGetItem(page, PageGetItemId(page, offset));
       if (!HnswIsNeighborTuple(neighborpage))
         continue;
-      for (uint32 i = 0; i < neighborpage->count; i++) {
+      for (i = 0; i < neighborpage->count; i++) {
         if (!BlockNumberIsValid(
                 BlockIdGetBlockNumber(&neighborpage->indextids[i].ip_blkid))) {
           continue;
         }
 
-        uint32 seqid = 0;
+        seqid = 0;
         memcpy(&seqid, &neighborpage->indextids[i].ip_blkid, sizeof(uint32));
         memcpy(&neighborpage->indextids[i], &item_pointers[seqid],
                sizeof(ItemPointerData));
@@ -361,7 +398,6 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   /* =========== Rewrite Neighbors END ============= */
 
   buildstate->external_socket->close(buildstate->external_socket);
-  free(data);
   usearch_free(usearch_index, &error);
   MemoryContextSwitchTo(oldCtx);
   MemoryContextDelete(tmpCtx);

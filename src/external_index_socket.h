@@ -16,11 +16,10 @@
 // maximum tuple size can be 8kb (8192 byte) + 8 byte label
 #define EXTERNAL_INDEX_MAX_TUPLE_SIZE 8200
 
-typedef enum
-{
-    EXTERNAL_INDEX_NO_ERR = 0,
-    EXTERNAL_INDEX_READ_FAILED,
-    EXTERNAL_INDEX_INDEXING_ERROR,
+typedef enum {
+  EXTERNAL_INDEX_NO_ERR = 0,
+  EXTERNAL_INDEX_READ_FAILED,
+  EXTERNAL_INDEX_INDEXING_ERROR,
 } ExternalIndexResponseError;
 
 typedef struct external_index_params_t {
@@ -68,9 +67,10 @@ external_index_socket_t *
 create_external_index_session(const char *host, int port, bool secure,
                               const usearch_init_options_t *params,
                               uint32 estimated_row_count);
-void external_index_receive_index_file(external_index_socket_t *socket_con,
-                                       uint64 *num_added_vectors,
-                                       char **result_buf);
+void                     external_index_receive_metadata(external_index_socket_t *socket_con,
+                                                         uint64                  *num_added_vectors,
+                                                         uint64                  *index_size);
+uint64                   external_index_receive_index_part(external_index_socket_t *socket_con, char *buf, uint64 size);
 void external_index_send_tuple(external_index_socket_t *socket_con,
                                usearch_label_t *label, void *vector,
                                uint8 scalar_bits, uint32 dimensions);
