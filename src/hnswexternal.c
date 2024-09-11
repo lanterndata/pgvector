@@ -131,7 +131,7 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   uint32 node_level = 0;
   uint32 entry_level = 0;
   uint32 vector_bytes = 0;
-  uint32 external_index_buffer_size = BLCKSZ * 2;
+  uint32 external_index_buffer_size = 1024 * 1024 * 10; // 10MB
   uint32 buffer_position = 0;
   uint32 node_size = 0;
   uint32 etupSize = 0;
@@ -191,6 +191,8 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
     elog(ERROR, "failed to get usearch index metadata");
   }
 
+  usearch_free(usearch_index, &error);
+
   InitUsearchIndexFromSocket(buildstate, &opts, &nelem, &index_file_size);
   /* ============== Parse Index END ============= */
   tmpCtx = AllocSetContextCreateInternal(
@@ -219,10 +221,15 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   blockno = BufferGetBlockNumber(buf);
   /* ============ Append first page END =================  */
 
+  total_read += external_index_receive_index_part(
+      buildstate->external_socket, external_index_data + buffer_position,
+      external_index_buffer_size - buffer_position);
+
   for (node_id = 0; node_id < nelem; node_id++) {
     // this function will add the tuples to index pages
 
-    if (total_read < index_file_size) {
+    if ((external_index_buffer_size - buffer_position) < BLCKSZ &&
+        total_read < index_file_size) {
       // receive max 2 page of nodes
       total_read += external_index_receive_index_part(
           buildstate->external_socket, external_index_data + buffer_position,
@@ -248,7 +255,6 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
 
     if (etupSize > HNSW_TUPLE_ALLOC_SIZE) {
       buildstate->external_socket->close(buildstate->external_socket);
-      usearch_free(usearch_index, &error);
       elog(ERROR, "index tuple too large");
     }
 
@@ -281,7 +287,6 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
 
       if (slot_count > ntup->count) {
         buildstate->external_socket->close(buildstate->external_socket);
-        usearch_free(usearch_index, &error);
         elog(ERROR,
              "neighbor list can not be more than %u in level %u, received %u",
              ntup->count, node_level, slot_count);
@@ -398,7 +403,6 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   /* =========== Rewrite Neighbors END ============= */
 
   buildstate->external_socket->close(buildstate->external_socket);
-  usearch_free(usearch_index, &error);
   MemoryContextSwitchTo(oldCtx);
   MemoryContextDelete(tmpCtx);
 }
