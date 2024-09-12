@@ -131,7 +131,6 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   uint32 node_level = 0;
   uint32 entry_level = 0;
   uint32 vector_bytes = 0;
-  uint32 external_index_buffer_size = 1024 * 1024 * 10; // 10MB
   uint32 buffer_position = 0;
   uint32 node_size = 0;
   uint32 etupSize = 0;
@@ -145,9 +144,13 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   uint64 entry_slot = 0;
   uint64 seqid = 0;
   char *node = 0;
-  char *external_index_data = palloc0(external_index_buffer_size);
+  char *external_index_data = NULL; 
   char hdr_buffer[USEARCH_HEADER_SIZE];
 
+  // unlogged table
+  if (!heap) return;
+
+  external_index_data = palloc0(EXTERNAL_INDEX_FILE_BUFFER_SIZE);
   TupleDesc tupleDesc = RelationGetDescr(heap);
   Form_pg_attribute attr =
       &tupleDesc->attrs[index->rd_index->indkey.values[0] - 1];
@@ -223,17 +226,17 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
 
   total_read += external_index_receive_index_part(
       buildstate->external_socket, external_index_data + buffer_position,
-      external_index_buffer_size - buffer_position);
+      EXTERNAL_INDEX_FILE_BUFFER_SIZE - buffer_position);
 
   for (node_id = 0; node_id < nelem; node_id++) {
     // this function will add the tuples to index pages
 
-    if ((external_index_buffer_size - buffer_position) < BLCKSZ &&
+    if ((EXTERNAL_INDEX_FILE_BUFFER_SIZE - buffer_position) < BLCKSZ &&
         total_read < index_file_size) {
       // receive max 2 page of nodes
       total_read += external_index_receive_index_part(
           buildstate->external_socket, external_index_data + buffer_position,
-          external_index_buffer_size - buffer_position);
+          EXTERNAL_INDEX_FILE_BUFFER_SIZE - buffer_position);
     }
 
     node = external_index_data;
@@ -346,7 +349,7 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
     pfree(ntup);
 
     // rotate buffer
-    buffer_position = external_index_buffer_size - node_size;
+    buffer_position = EXTERNAL_INDEX_FILE_BUFFER_SIZE - node_size;
     memcpy(external_index_data, external_index_data + node_size,
            buffer_position);
   }
