@@ -829,6 +829,18 @@ CREATE CAST (sparsevec AS halfvec)
 CREATE CAST (halfvec AS sparsevec)
 	WITH FUNCTION halfvec_to_sparsevec(halfvec, integer, boolean) AS IMPLICIT;
 
+CREATE CAST (integer[] AS sparsevec)
+	WITH FUNCTION array_to_sparsevec(integer[], integer, boolean) AS ASSIGNMENT;
+
+CREATE CAST (real[] AS sparsevec)
+	WITH FUNCTION array_to_sparsevec(real[], integer, boolean) AS ASSIGNMENT;
+
+CREATE CAST (double precision[] AS sparsevec)
+	WITH FUNCTION array_to_sparsevec(double precision[], integer, boolean) AS ASSIGNMENT;
+
+CREATE CAST (numeric[] AS sparsevec)
+	WITH FUNCTION array_to_sparsevec(numeric[], integer, boolean) AS ASSIGNMENT;
+
 -- sparsevec operators
 
 CREATE OPERATOR <-> (
