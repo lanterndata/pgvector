@@ -440,6 +440,7 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
     if (buildstate->external_socket && buildstate->external_socket->close) {
       buildstate->external_socket->close(buildstate->external_socket);
     }
+    PG_RE_THROW();
   }
   PG_END_TRY();
 }
