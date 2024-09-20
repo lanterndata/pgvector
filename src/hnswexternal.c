@@ -89,9 +89,10 @@ static void InitUsearchIndexFromSocket(HnswBuildState *buildstate,
     elog(ERROR, "could not initialize usearch index");
   }
 
-  buildstate->external_socket = create_external_index_session(
+  buildstate->external_socket = palloc0(sizeof(external_index_socket_t));
+  create_external_index_session(
       hnsw_external_index_host, hnsw_external_index_port,
-      hnsw_external_index_secure, opts, 100000);
+      hnsw_external_index_secure, opts, buildstate, 100000);
 
   buildstate->reltuples = table_index_build_scan(
       buildstate->heap, buildstate->index, buildstate->indexInfo, true, true,
@@ -101,8 +102,10 @@ static void InitUsearchIndexFromSocket(HnswBuildState *buildstate,
                                   index_file_size);
 }
 
-void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
-                         HnswBuildState *buildstate, ForkNumber forkNum) {
+static void ImportExternalIndexInternal(Relation heap, Relation index,
+                                        IndexInfo *indexInfo,
+                                        HnswBuildState *buildstate,
+                                        ForkNumber forkNum) {
   /* Read and Parse Usearch Index */
   MemoryContext oldCtx;
   MemoryContext tmpCtx;
@@ -111,7 +114,6 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   BlockNumber blockno;
   BlockNumber last_data_block;
   metadata_t metadata;
-  usearch_index_t usearch_index;
   usearch_error_t error = NULL;
   usearch_init_options_t opts = {0};
   ldb_unaligned_slot_union_t *slots = NULL;
@@ -124,6 +126,12 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   HnswElementTuple etup = NULL;
   HnswNeighborTuple ntup = NULL;
   HnswMetaPage metap = NULL;
+  TupleDesc tupleDesc;
+  Form_pg_attribute attr;
+
+  Oid columnType;
+  Oid Vector_Oid;
+  Oid HalfVector_Oid;
   uint16 neighbor_len = 0;
   int32 i = 0;
   int32 j = 0;
@@ -144,19 +152,19 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   uint64 entry_slot = 0;
   uint64 seqid = 0;
   char *node = 0;
-  char *external_index_data = NULL; 
+  char *external_index_data = NULL;
   char hdr_buffer[USEARCH_HEADER_SIZE];
 
   // unlogged table
-  if (!heap) return;
+  if (!heap)
+    return;
 
   external_index_data = palloc0(EXTERNAL_INDEX_FILE_BUFFER_SIZE);
-  TupleDesc tupleDesc = RelationGetDescr(heap);
-  Form_pg_attribute attr =
-      &tupleDesc->attrs[index->rd_index->indkey.values[0] - 1];
-  Oid columnType = attr->atttypid;
-  Oid Vector_Oid = TypenameGetTypid("vector");
-  Oid HalfVector_Oid = TypenameGetTypid("halfvec");
+  tupleDesc = RelationGetDescr(heap);
+  attr = &tupleDesc->attrs[index->rd_index->indkey.values[0] - 1];
+  columnType = attr->atttypid;
+  Vector_Oid = TypenameGetTypid("vector");
+  HalfVector_Oid = TypenameGetTypid("halfvec");
 
   opts.dimensions = buildstate->dimensions;
   opts.connectivity = buildstate->m;
@@ -184,17 +192,18 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
     elog(ERROR, "unsupported distance metric for external indexing");
   }
 
-  usearch_index = usearch_init(&opts, NULL, &error);
+  buildstate->usearch_index = usearch_init(&opts, NULL, &error);
   if (error != NULL) {
     elog(ERROR, "failed to initialize usearch index");
   }
-  metadata = usearch_index_metadata(usearch_index, &error);
+  metadata = usearch_index_metadata(buildstate->usearch_index, &error);
 
   if (error != NULL) {
     elog(ERROR, "failed to get usearch index metadata");
   }
 
-  usearch_free(usearch_index, &error);
+  usearch_free(buildstate->usearch_index, &error);
+  buildstate->usearch_index = NULL;
 
   InitUsearchIndexFromSocket(buildstate, &opts, &nelem, &index_file_size);
   /* ============== Parse Index END ============= */
@@ -211,7 +220,7 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
 
   item_pointers = palloc(nelem * sizeof(ItemPointerData));
 
-  total_read += external_index_receive_index_part(
+  total_read += external_index_read_all(
       buildstate->external_socket, (char *)&hdr_buffer, USEARCH_HEADER_SIZE);
   entry_slot = usearch_header_get_entry_slot((char *)&hdr_buffer);
 
@@ -224,7 +233,7 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   blockno = BufferGetBlockNumber(buf);
   /* ============ Append first page END =================  */
 
-  total_read += external_index_receive_index_part(
+  total_read += external_index_read_all(
       buildstate->external_socket, external_index_data + buffer_position,
       EXTERNAL_INDEX_FILE_BUFFER_SIZE - buffer_position);
 
@@ -234,7 +243,7 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
     if ((EXTERNAL_INDEX_FILE_BUFFER_SIZE - buffer_position) < BLCKSZ &&
         total_read < index_file_size) {
       // receive max 2 page of nodes
-      total_read += external_index_receive_index_part(
+      total_read += external_index_read_all(
           buildstate->external_socket, external_index_data + buffer_position,
           EXTERNAL_INDEX_FILE_BUFFER_SIZE - buffer_position);
     }
@@ -257,7 +266,6 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
     combinedSize = etupSize + ntupSize + sizeof(ItemIdData);
 
     if (etupSize > HNSW_TUPLE_ALLOC_SIZE) {
-      buildstate->external_socket->close(buildstate->external_socket);
       elog(ERROR, "index tuple too large");
     }
 
@@ -289,9 +297,9 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
       slots = get_node_neighbors_mut(&metadata, node, i, &slot_count);
 
       if (slot_count > ntup->count) {
-        buildstate->external_socket->close(buildstate->external_socket);
         elog(ERROR,
-             "neighbor list can not be more than %u in level %u, received %u",
+             "neighbor list can not be more than %u in level %u, "
+             "received %u",
              ntup->count, node_level, slot_count);
       }
 
@@ -408,4 +416,23 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
   buildstate->external_socket->close(buildstate->external_socket);
   MemoryContextSwitchTo(oldCtx);
   MemoryContextDelete(tmpCtx);
+}
+
+void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
+                         HnswBuildState *buildstate, ForkNumber forkNum) {
+  usearch_error_t error = NULL;
+  PG_TRY();
+  { ImportExternalIndexInternal(heap, index, indexInfo, buildstate, forkNum); }
+  PG_CATCH();
+  {
+    if (buildstate->usearch_index) {
+      usearch_free(buildstate->usearch_index, &error);
+      buildstate->usearch_index = NULL;
+    }
+
+    if (buildstate->external_socket && buildstate->external_socket->close) {
+      buildstate->external_socket->close(buildstate->external_socket);
+    }
+  }
+  PG_END_TRY();
 }

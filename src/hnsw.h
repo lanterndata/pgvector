@@ -8,6 +8,8 @@
 #include "lib/pairingheap.h"
 #include "nodes/execnodes.h"
 #include "port.h"				/* for random() */
+#include "usearch.h"
+#include "external_index_socket.h"
 #include "utils/relptr.h"
 #include "utils/sampling.h"
 #include "vector.h"
@@ -283,6 +285,7 @@ typedef struct HnswBuildState
 
 	/* External Indexing */
 	external_index_socket_t *external_socket;
+	usearch_index_t usearch_index;
 	uint8 scalar_bits;
 }			HnswBuildState;
 
