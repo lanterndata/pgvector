@@ -55,6 +55,7 @@ static usearch_label_t ItemPointer2Label(ItemPointer itemPtr) {
 static void ExternalIndexBuildCallback(Relation index, CALLBACK_ITEM_POINTER,
                                        Datum *values, bool *isnull,
                                        bool tupleIsAlive, void *state) {
+  MemoryContext oldCtx;
   HnswBuildState *buildstate = (HnswBuildState *)state;
   HnswGraph *graph = buildstate->graph;
   Vector *vec;
@@ -68,6 +69,9 @@ static void ExternalIndexBuildCallback(Relation index, CALLBACK_ITEM_POINTER,
   if (isnull[0])
     return;
 
+  /* Use memory context */
+  oldCtx = MemoryContextSwitchTo(buildstate->tmpCtx);
+
   /* Insert tuple */
   vec = (Vector *)PG_DETOAST_DATUM(values[0]);
 
@@ -78,6 +82,9 @@ static void ExternalIndexBuildCallback(Relation index, CALLBACK_ITEM_POINTER,
   pgstat_progress_update_param(PROGRESS_CREATEIDX_TUPLES_DONE,
                                ++graph->indtuples);
   SpinLockRelease(&graph->lock);
+  /* Reset memory context */
+  MemoryContextSwitchTo(oldCtx);
+  MemoryContextReset(buildstate->tmpCtx);
 }
 
 static void InitUsearchIndexFromSocket(HnswBuildState *buildstate,
