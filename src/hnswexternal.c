@@ -362,6 +362,7 @@ static void ImportExternalIndexInternal(Relation heap, Relation index,
 
     pfree(etup);
     pfree(ntup);
+    pfree(vec);
 
     // rotate buffer
     buffer_position = EXTERNAL_INDEX_FILE_BUFFER_SIZE - node_size;
