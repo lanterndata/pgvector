@@ -1,5 +1,5 @@
 EXTENSION = vector
-EXTVERSION = 0.7.4
+EXTVERSION = 0.7.4-lanterncloud
 
 MODULE_big = vector
 DATA = $(wildcard sql/*--*--*.sql)
