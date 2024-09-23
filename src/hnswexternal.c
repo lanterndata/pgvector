@@ -146,7 +146,7 @@ static void ImportExternalIndexInternal(Relation heap, Relation index,
   uint32 node_level = 0;
   uint32 entry_level = 0;
   uint32 vector_bytes = 0;
-  uint32 buffer_position = 0;
+  uint32 read_position = 0;
   uint32 node_size = 0;
   uint32 etupSize = 0;
   uint32 ntupSize = 0;
@@ -240,9 +240,9 @@ static void ImportExternalIndexInternal(Relation heap, Relation index,
   blockno = BufferGetBlockNumber(buf);
   /* ============ Append first page END =================  */
 
-  total_read += external_index_read_all(
-      buildstate->external_socket, external_index_data + buffer_position,
-      EXTERNAL_INDEX_FILE_BUFFER_SIZE - buffer_position);
+  total_read +=
+      external_index_read_all(buildstate->external_socket, external_index_data,
+                              EXTERNAL_INDEX_FILE_BUFFER_SIZE);
 
   vec = InitVector(buildstate->dimensions);
   etupSize = HNSW_ELEMENT_TUPLE_SIZE(VARSIZE_ANY(vec));
@@ -251,15 +251,20 @@ static void ImportExternalIndexInternal(Relation heap, Relation index,
   for (node_id = 0; node_id < nelem; node_id++) {
     // this function will add the tuples to index pages
 
-    if ((EXTERNAL_INDEX_FILE_BUFFER_SIZE - buffer_position) < BLCKSZ &&
+    if ((EXTERNAL_INDEX_FILE_BUFFER_SIZE - read_position) < BLCKSZ &&
         total_read < index_file_size) {
-      // receive max 2 page of nodes
+      // rotate buffer
+      memcpy(external_index_data, external_index_data + read_position,
+             EXTERNAL_INDEX_FILE_BUFFER_SIZE - read_position);
       total_read += external_index_read_all(
-          buildstate->external_socket, external_index_data + buffer_position,
-          EXTERNAL_INDEX_FILE_BUFFER_SIZE - buffer_position);
+          buildstate->external_socket,
+          external_index_data +
+              (EXTERNAL_INDEX_FILE_BUFFER_SIZE - read_position),
+          read_position);
+      read_position = 0;
     }
 
-    node = external_index_data;
+    node = external_index_data + read_position;
     node_level = level_from_node(node);
     node_size = node_tuple_size(node, metadata.dimensions, &metadata);
     node_label = label_from_node(node);
@@ -370,9 +375,7 @@ static void ImportExternalIndexInternal(Relation heap, Relation index,
     /* ================ Insert Tuples Into Index Page END =================== */
 
     // rotate buffer
-    buffer_position = EXTERNAL_INDEX_FILE_BUFFER_SIZE - node_size;
-    memcpy(external_index_data, external_index_data + node_size,
-           buffer_position);
+    read_position += node_size;
   }
 
   pfree(vec);
