@@ -244,6 +244,10 @@ static void ImportExternalIndexInternal(Relation heap, Relation index,
       buildstate->external_socket, external_index_data + buffer_position,
       EXTERNAL_INDEX_FILE_BUFFER_SIZE - buffer_position);
 
+  vec = InitVector(buildstate->dimensions);
+  etupSize = HNSW_ELEMENT_TUPLE_SIZE(VARSIZE_ANY(vec));
+  etup = palloc0(etupSize);
+
   for (node_id = 0; node_id < nelem; node_id++) {
     // this function will add the tuples to index pages
 
@@ -264,19 +268,25 @@ static void ImportExternalIndexInternal(Relation heap, Relation index,
     vector_bytes = node_vector_size(node, metadata.dimensions, &metadata);
     // there should not be an issue with mixing HalfVector and Vector types
     // as long as the struct layout is the same
-    vec = InitVector(buildstate->dimensions);
     memcpy(vec->x, node + (node_size - vector_bytes), vector_bytes);
     // =======================================
 
-    etupSize = HNSW_ELEMENT_TUPLE_SIZE(VARSIZE_ANY(vec));
-    ntupSize = HNSW_NEIGHBOR_TUPLE_SIZE(node_level, metadata.connectivity);
+    if (ntupSize !=
+        HNSW_NEIGHBOR_TUPLE_SIZE(node_level, metadata.connectivity)) {
+
+      ntupSize = HNSW_NEIGHBOR_TUPLE_SIZE(node_level, metadata.connectivity);
+      if (ntup)
+        pfree(ntup);
+
+      ntup = palloc0(ntupSize);
+    }
+
     combinedSize = etupSize + ntupSize + sizeof(ItemIdData);
 
     if (etupSize > HNSW_TUPLE_ALLOC_SIZE) {
       elog(ERROR, "index tuple too large");
     }
 
-    etup = palloc0(etupSize);
     etup->type = HNSW_ELEMENT_TUPLE_TYPE;
     etup->level = node_level;
     etup->deleted = 0;
@@ -292,7 +302,6 @@ static void ImportExternalIndexInternal(Relation heap, Relation index,
     /* ========= Create Element Tuple END ============ */
 
     /* Create Neighbor Tuple */
-    ntup = palloc0(ntupSize);
     ntup->type = HNSW_NEIGHBOR_TUPLE_TYPE;
     ntup->count = (node_level + 2) * metadata.connectivity;
     ntup->unused = 0;
@@ -360,15 +369,18 @@ static void ImportExternalIndexInternal(Relation heap, Relation index,
                          false);
     /* ================ Insert Tuples Into Index Page END =================== */
 
-    pfree(etup);
-    pfree(ntup);
-    pfree(vec);
-
     // rotate buffer
     buffer_position = EXTERNAL_INDEX_FILE_BUFFER_SIZE - node_size;
     memcpy(external_index_data, external_index_data + node_size,
            buffer_position);
   }
+
+  pfree(vec);
+  pfree(etup);
+
+  // if there were no elements indexed ntup will not be allocated
+  if (ntup)
+    pfree(ntup);
 
   UnlockReleaseBuffer(buf);
 
