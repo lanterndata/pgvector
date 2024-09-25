@@ -244,7 +244,14 @@ static void ImportExternalIndexInternal(Relation heap, Relation index,
       external_index_read_all(buildstate->external_socket, external_index_data,
                               EXTERNAL_INDEX_FILE_BUFFER_SIZE);
 
-  vec = InitVector(buildstate->dimensions);
+  if (columnType == Vector_Oid) {
+    vec = InitVector(buildstate->dimensions);
+  } else if (columnType == HalfVector_Oid) {
+    vec = InitHalfVector(buildstate->dimensions);
+  } else {
+    elog(ERROR, "unsupported element type for external indexing");
+  }
+
   etupSize = HNSW_ELEMENT_TUPLE_SIZE(VARSIZE_ANY(vec));
   etup = palloc0(etupSize);
 
@@ -385,6 +392,7 @@ static void ImportExternalIndexInternal(Relation heap, Relation index,
   if (ntup)
     pfree(ntup);
 
+  MarkBufferDirty(buf);
   UnlockReleaseBuffer(buf);
 
   last_data_block = blockno;
