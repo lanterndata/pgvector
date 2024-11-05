@@ -714,6 +714,9 @@ InitBuildState(HnswBuildState * buildstate, Relation heap, Relation index, Index
 	buildstate->hnswleader = NULL;
 	buildstate->hnswshared = NULL;
 	buildstate->hnswarea = NULL;
+
+	buildstate->usearch_index = NULL;
+	buildstate->external_socket = NULL;
 }
 
 /*

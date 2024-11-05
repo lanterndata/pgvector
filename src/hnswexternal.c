@@ -14,6 +14,7 @@
 #include "access/xloginsert.h"
 #include "catalog/index.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_proc.h"
 #include "catalog/pg_type_d.h"
 #include "commands/progress.h"
 #include "miscadmin.h"
@@ -22,6 +23,7 @@
 #include "tcop/tcopprot.h"
 #include "utils/datum.h"
 #include "utils/memutils.h"
+#include "executor/spi.h"
 
 #include "external_index_socket.h"
 #include "halfvec.h"
@@ -43,6 +45,36 @@
 #else
 #define CALLBACK_ITEM_POINTER HeapTuple hup
 #endif
+
+static Oid TypenameGetVectorTypid(char *typename) {
+    int ret;
+    Oid result_oid = 0;
+    char query[256];
+
+    snprintf(query, sizeof(query),
+	"SELECT pg_type.oid FROM pg_type "
+	"JOIN pg_depend ON pg_type.oid = pg_depend.objid "
+	"JOIN pg_extension ON pg_depend.refobjid = pg_extension.oid "
+	"WHERE typname='%s' AND extname='vector'"
+, typename);
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        elog(ERROR, "SPI_connect failed");
+
+    ret = SPI_exec(query, 1);
+
+    if (ret == SPI_OK_SELECT && SPI_processed > 0)
+    {
+        bool isnull;
+        Datum result_datum = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
+
+        if (!isnull)
+            result_oid = DatumGetObjectId(result_datum);
+    }
+
+    SPI_finish();
+    return result_oid;
+}
 
 static usearch_label_t ItemPointer2Label(ItemPointer itemPtr) {
   usearch_label_t label = 0;
@@ -170,8 +202,8 @@ static void ImportExternalIndexInternal(Relation heap, Relation index,
   tupleDesc = RelationGetDescr(heap);
   attr = &tupleDesc->attrs[index->rd_index->indkey.values[0] - 1];
   columnType = attr->atttypid;
-  Vector_Oid = TypenameGetTypid("vector");
-  HalfVector_Oid = TypenameGetTypid("halfvec");
+  Vector_Oid = TypenameGetVectorTypid("vector");
+  HalfVector_Oid = TypenameGetVectorTypid("halfvec");
 
   opts.dimensions = buildstate->dimensions;
   opts.connectivity = buildstate->m;
@@ -189,11 +221,13 @@ static void ImportExternalIndexInternal(Relation heap, Relation index,
     elog(ERROR, "unsupported element type for external indexing");
   }
 
-  if (buildstate->procinfo->fn_addr == vector_negative_inner_product ||
-      buildstate->procinfo->fn_addr == halfvec_negative_inner_product) {
+  if (buildstate->support.procinfo->fn_addr == vector_negative_inner_product ||
+      buildstate->support.procinfo->fn_addr == halfvec_negative_inner_product) {
     opts.metric_kind = usearch_metric_cos_k;
-  } else if (buildstate->procinfo->fn_addr == vector_l2_squared_distance ||
-             buildstate->procinfo->fn_addr == halfvec_l2_squared_distance) {
+  } else if (buildstate->support.procinfo->fn_addr ==
+                 vector_l2_squared_distance ||
+             buildstate->support.procinfo->fn_addr ==
+                 halfvec_l2_squared_distance) {
     opts.metric_kind = usearch_metric_l2sq_k;
   } else {
     elog(ERROR, "unsupported distance metric for external indexing");
@@ -316,7 +350,6 @@ static void ImportExternalIndexInternal(Relation heap, Relation index,
     /* Create Neighbor Tuple */
     ntup->type = HNSW_NEIGHBOR_TUPLE_TYPE;
     ntup->count = (node_level + 2) * metadata.connectivity;
-    ntup->unused = 0;
 
     neighbor_len = 0;
 
@@ -453,7 +486,9 @@ void ImportExternalIndex(Relation heap, Relation index, IndexInfo *indexInfo,
                          HnswBuildState *buildstate, ForkNumber forkNum) {
   usearch_error_t error = NULL;
   PG_TRY();
-  { ImportExternalIndexInternal(heap, index, indexInfo, buildstate, forkNum); }
+  {
+    ImportExternalIndexInternal(heap, index, indexInfo, buildstate, forkNum);
+  }
   PG_CATCH();
   {
     if (buildstate->usearch_index) {

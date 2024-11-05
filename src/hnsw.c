@@ -121,7 +121,7 @@ HnswInit(void)
                              "Use SSL connection when connecting to external index socket",
                              "Set this to 0 to disable secure connection",
                              &hnsw_external_index_secure,
-                             true,
+                             false,
                              PGC_USERSET,
                              0,
                              NULL,
