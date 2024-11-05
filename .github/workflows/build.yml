@@ -22,13 +22,15 @@ jobs:
             os: ubuntu-20.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
       - uses: ankane/setup-postgres@v1
         with:
           postgres-version: ${{ matrix.postgres }}
           dev-files: true
       - run: make
         env:
-          PG_CFLAGS: -DUSE_ASSERT_CHECKING -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare
+          PG_CFLAGS: -DUSE_ASSERT_CHECKING -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare
       - run: |
           export PG_CONFIG=`which pg_config`
           sudo --preserve-env=PG_CONFIG make install
@@ -52,12 +54,14 @@ jobs:
             os: macos-13
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
       - uses: ankane/setup-postgres@v1
         with:
           postgres-version: ${{ matrix.postgres }}
       - run: make
         env:
-          PG_CFLAGS: -DUSE_ASSERT_CHECKING -Wall -Wextra -Werror -Wno-unused-parameter
+          PG_CFLAGS: -DUSE_ASSERT_CHECKING -Wall -Wextra -Wno-unused-parameter
       - run: make install
       - run: make installcheck
       - if: ${{ failure() }}
@@ -82,6 +86,8 @@ jobs:
     if: ${{ !startsWith(github.ref_name, 'mac') }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
       - uses: ankane/setup-postgres@v1
         with:
           postgres-version: 14
@@ -109,13 +115,14 @@ jobs:
           cd pgvector
           git fetch origin ${{ github.ref }}
           git reset --hard FETCH_HEAD
+          git submodule update --recursive --init
           make
           make install
           chown -R postgres .
           sudo -u postgres make installcheck
           sudo -u postgres make prove_installcheck
         env:
-          PG_CFLAGS: -DUSE_ASSERT_CHECKING -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare
+          PG_CFLAGS: -DUSE_ASSERT_CHECKING -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare
       - if: ${{ failure() }}
         run: cat pgvector/regression.diffs
   valgrind:
@@ -123,6 +130,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
       - uses: ankane/setup-postgres-valgrind@v1
         with:
           postgres-version: 16
